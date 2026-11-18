@@ -1,36 +1,43 @@
-const CACHE = 'recettes-v1';
-const ASSETS = ['/', '/index.html', '/manifest.json', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/apple-touch-icon.png'];
+const CACHE = 'recettes-v2';
 
-self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
-  self.skipWaiting();
-});
-
+self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys =>
-    Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
-  ));
-  self.clients.claim();
+  e.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
+    ).then(() => self.clients.claim())
+  );
 });
 
 self.addEventListener('fetch', e => {
-  // Images distantes (Yuka, Jow CDN) : network-first avec fallback cache
-  if (e.request.url.match(/\.(jpg|jpeg|png|webp|svg)$/i) && !e.request.url.startsWith(self.location.origin)) {
+  const url = e.request.url;
+
+  // Images distantes : network avec cache en arrière-plan
+  if (!url.startsWith(self.location.origin) && /\.(jpg|jpeg|png|webp|svg)$/i.test(url)) {
     e.respondWith(
-      fetch(e.request).then(r => {
-        const clone = r.clone();
-        caches.open(CACHE).then(c => c.put(e.request, clone));
-        return r;
-      }).catch(() => caches.match(e.request))
+      caches.open(CACHE).then(cache =>
+        cache.match(e.request).then(cached => {
+          const networkFetch = fetch(e.request).then(res => {
+            cache.put(e.request, res.clone());
+            return res;
+          }).catch(() => cached);
+          return cached || networkFetch;
+        })
+      )
     );
     return;
   }
-  // Tout le reste : cache-first (index.html, icons)
-  e.respondWith(
-    caches.match(e.request).then(r => r || fetch(e.request).then(res => {
-      const clone = res.clone();
-      caches.open(CACHE).then(c => c.put(e.request, clone));
-      return res;
-    }))
-  );
+
+  // Page principale et assets locaux : network-first, cache en fallback
+  if (url.startsWith(self.location.origin)) {
+    e.respondWith(
+      fetch(e.request)
+        .then(res => {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
+          return res;
+        })
+        .catch(() => caches.match(e.request))
+    );
+  }
 });
